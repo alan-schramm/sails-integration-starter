@@ -1,0 +1,36 @@
+{
+  "name": "sails-integration-starter",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A real, working Next.js starter for integrating @satsails/p2p-trading-sdk, plus two standalone runnable golden-path scripts. Installs @satsails/p2p-trading-sdk and @satsails/sdk-react straight from npm — no monorepo required. See README.md for the quick start.",
+  "scripts": {
+    "dev": "next dev -p 3001",
+    "build": "next build",
+    "start": "next start -p 3001",
+    "example:p2p-bitcoin-trade": "ts-node --transpile-only examples/p2p-bitcoin-trade.ts",
+    "example:escrow-with-arbitration": "ts-node --transpile-only examples/escrow-with-arbitration.ts",
+    "test": "jest"
+  },
+  "dependencies": {
+    "@satsails/p2p-trading-sdk": "^0.1.0",
+    "@satsails/sdk-react": "^0.1.0",
+    "@tanstack/react-query": "^5.90.5",
+    "next": "^16.2.12",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "tweetnacl": "^1.0.3"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.3.3",
+    "@types/jest": "^30.0.0",
+    "@types/node": "^26.1.1",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "jest": "^30.4.2",
+    "postcss": "^8.5.24",
+    "tailwindcss": "^4.3.3",
+    "ts-jest": "^29.4.11",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.3"
+  }
+}
