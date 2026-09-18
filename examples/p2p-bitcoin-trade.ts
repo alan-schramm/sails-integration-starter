@@ -7,24 +7,18 @@
  * doesn't repeat that reasoning, only the asset differs (BTC, not
  * USDT_ERC20).
  *
- * Escrow type: deliberately left unset, so the server falls back to
- * whatever `config.features.mockEscrow` resolves to
- * (`escrow.service.ts`'s `type ?? (config.features.mockEscrow ? 'MOCK' :
- * 'MULTISIG')`) — MOCK on this repo's own local dev `.env`
- * (`MOCK_ESCROW=true`). The real MULTISIG provider is non-custodial by
- * design (`multisig.provider.ts`'s `lockFunds()`): it verifies actual
- * on-chain BTC arrived at a derived P2WSH address via a block-explorer
- * API — it does not, and structurally cannot, move funds itself. That
- * makes it correct but not something an unattended script can drive
- * end-to-end without a human sending real testnet BTC. Explicitly
- * requesting `type: 'MULTISIG'` here would make this script fail exactly
- * where a real integration also would, at the same real wall — see
- * `docs/USE_CASES.md` for how to drive the real MULTISIG flow by hand.
+ * Escrow type: this standalone demo passes `type: 'MOCK'` explicitly.
+ * SDK 0.2.0 recommends the real MULTISIG provider for BTC when type is omitted,
+ * so relying on an old server-side MOCK default would be misleading. This
+ * example proves the coordination flow without moving real funds.
  *
- * Prerequisites: a Sails node running locally (`npm run dev` from the
- * repo root).
+ * SDK 0.2.0 also makes payout destination authority explicit: the buyer
+ * registers their own BTC PayoutAddress before the seller releases. A
+ * release-time toAddress is no longer authoritative.
  *
- * Run: npm run example:p2p-bitcoin-trade -w @sails/example-integration-starter
+ * Prerequisites: a Sails node running at SAILS_BASE_URL.
+ *
+ * Run: npm run example:p2p-bitcoin-trade
  */
 import { SailsClient, type ChatMessageEvent } from '@satsails/p2p-trading-sdk'
 
@@ -100,11 +94,18 @@ async function main() {
   sellerChat.close()
   buyerChat.close()
 
-  step('Seller creates and locks the escrow (settlement.create + settlement.lock)')
+  step('Buyer registers the authoritative BTC payout address')
+  await buyerWallet.settlement.setPayoutAddress({
+    asset: 'BTC',
+    address: 'example-buyer-payout-address',
+  })
+
+  step('Seller creates and locks the escrow (explicit MOCK demo provider)')
   const escrow = await sellerWallet.settlement.create({
     tradeId: trade.id,
     lockedAmount: '0.01',
     asset: 'BTC',
+    type: 'MOCK',
   })
   await sellerWallet.settlement.lock(escrow.id)
   console.log(`    escrow ${escrow.id} locked (type: ${escrow.type})`)
@@ -113,8 +114,8 @@ async function main() {
   await buyerWallet.settlement.markPaymentSent(escrow.id)
   console.log('    payment marked sent')
 
-  step('Seller releases the escrow (settlement.release)')
-  const released = await sellerWallet.settlement.release(escrow.id, 'example-payout-address')
+  step('Seller releases the escrow; server resolves buyer payout destination')
+  const released = await sellerWallet.settlement.release(escrow.id)
   console.log(`    escrow status: ${released.status}, txReleaseId: ${released.txReleaseId}`)
 
   console.log(`\nDone. Paste this tradeId into the Next.js starter's "View a trade" section:\n\n    ${trade.id}\n`)
