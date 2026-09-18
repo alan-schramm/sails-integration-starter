@@ -118,7 +118,13 @@ async function main() {
   const released = await sellerWallet.settlement.release(escrow.id)
   console.log(`    escrow status: ${released.status}, txReleaseId: ${released.txReleaseId}`)
 
-  console.log(`\nDone. Paste this tradeId into the Next.js starter's "View a trade" section:\n\n    ${trade.id}\n`)
+  const finalTrade = await sellerWallet.openp2p.getTrade(trade.id)
+  const finalEscrow = await sellerWallet.settlement.get(escrow.id)
+
+  console.log(
+    `\nEVIDENCE tradeId=${finalTrade.id} tradeStatus=${finalTrade.status} escrowId=${finalEscrow.id} escrowStatus=${finalEscrow.status} escrowType=${finalEscrow.type}`
+  )
+  console.log(`\nDone. External public-SDK lifecycle completed for trade ${trade.id}.\n`)
 }
 
 main().catch((err) => {
