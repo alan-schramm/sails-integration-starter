@@ -1,133 +1,180 @@
 # Sails Integration Starter
 
-A real, working starting point for integrating `@satsails/p2p-trading-sdk` — a Next.js
-app that talks to a live Sails node, plus two standalone scripts that
-run the actual protocol flows end-to-end. Everything here has been run
-against a real local node while writing it; nothing in this package is
-a mock of the protocol itself (the `wallet-mock/` folder is a mock of a
-*wallet*, clearly labeled — see below).
+Standalone partner/reference starter for the published Sails SDK family.
+
+Current verified baseline:
+
+- `@satsails/p2p-trading-sdk@0.2.0`
+- `@satsails/sdk-react@0.2.0`
+- transitive `@satsails/p2p-schemas@0.2.0`
+
+This repository consumes the SDKs from the public npm registry. It does not
+link to the Sails Protocol monorepo and does not require workspace-local
+packages.
+
+## What this proves
+
+A clean external consumer can:
+
+1. install the published SDK artifacts from npm;
+2. construct a real `SailsClient`;
+3. call public liquidity APIs from a Next.js app;
+4. run authenticated buyer/seller example flows;
+5. exercise dispute/arbitration with a signed authority decision;
+6. build and test without cloning the protocol source as a dependency.
+
+The Sails node itself is a separate service. Point this starter at any
+compatible node, or run the reference node locally for development.
+
+## Prerequisites
+
+- Node.js 22.12+ (Node 24 is the CI baseline)
+- npm
+- a running Sails node for network examples
 
 ## Quick start
 
-This is a standalone project — `npm install` here pulls
-`@satsails/p2p-trading-sdk` and `@satsails/sdk-react` straight from the
-public npm registry, no monorepo required. All commands below run from
-**this directory**.
-
-You still need a running Sails node to talk to (this starter is a
-client, not the protocol server itself) — either run the reference
-server from [Sails-Protocol](https://github.com/alan-schramm/Sails-Protocol)
-locally (steps 1-4 below), or point the env vars in step 6 at any
-Sails node you already have running.
-
-**Prerequisites:** Node.js 20+, npm. No Docker needed for the node —
-local Postgres and Redis are scripted.
-
-1. **Clone and set up the Sails node** (separate checkout, only needed
-   if you don't already have a node to point at):
-   ```bash
-   git clone https://github.com/alan-schramm/Sails-Protocol.git
-   cd Sails-Protocol
-   npm install
-   npm run db:local:start
-   npm run redis:local:start
-   cp .env.example .env
-   npm run db:generate
-   npm run db:migrate
-   ```
-
-2. **Start the node** (keep this running in its own terminal):
-   ```bash
-   npm run dev
-   ```
-   Confirm it's up: `curl http://localhost:3000/health` should return `200`.
-
-3. **Back in this starter's own directory, install its dependencies**:
-   ```bash
-   npm install
-   ```
-
-4. **Point this starter at the node**:
-   ```bash
-   cp .env.example .env
-   ```
-   The defaults already point at `http://localhost:3000`, matching
-   step 2 — edit `.env` if your node runs elsewhere.
-
-5. **Start this starter's Next.js app**:
-   ```bash
-   npm run dev
-   ```
-   Open http://localhost:3001 — the "Discover offers" section makes a
-   real `liquidity.discover()` call against the node from step 2. An
-   empty list is expected on a fresh database; publish an offer first
-   (step 6) or via [`examples/simple-wallet`](https://github.com/alan-schramm/Sails-Protocol/tree/main/examples/simple-wallet)
-   to see one.
-
-6. **Run the golden-path example** (optional, in a second terminal —
-   publishes a real offer, opens a real trade, locks and releases a
-   real escrow, and prints a `tradeId` you can paste into the "View a
-   trade" section of the app from step 5):
-   ```bash
-   npm run example:p2p-bitcoin-trade
-   ```
-
-Step 1 is a one-time setup for the node; once it's running, steps 3-6
-are the ones you'll repeat, and take under a minute.
-
-## What's in here
-
+```bash
+git clone https://github.com/alan-schramm/sails-integration-starter.git
+cd sails-integration-starter
+npm ci
+cp .env.example .env
+npm run dev
 ```
+
+Open http://localhost:3001.
+
+The default environment points to:
+
+```text
+http://localhost:3000
+```
+
+Change `NEXT_PUBLIC_SAILS_BASE_URL` and `SAILS_BASE_URL` if your node
+runs elsewhere.
+
+## Running a reference Sails node locally
+
+If you do not already have a node, use a separate checkout of
+[Sails-Protocol](https://github.com/alan-schramm/Sails-Protocol):
+
+```bash
+git clone https://github.com/alan-schramm/Sails-Protocol.git
+cd Sails-Protocol
+npm ci
+npm run db:local:start
+npm run redis:local:start
+cp .env.example .env
+npm run db:generate
+npm run db:migrate
+npm run dev
+```
+
+That checkout is the server/reference implementation. This starter still
+consumes its SDK dependencies only from npm.
+
+## Examples
+
+### P2P Bitcoin trade
+
+```bash
+npm run example:p2p-bitcoin-trade
+```
+
+The script creates two independent authenticated clients, publishes and
+accepts an offer, opens chat, registers the buyer's payout address, creates
+an escrow, marks payment sent and releases.
+
+For an unattended demo it explicitly uses `type: 'MOCK'`. This is
+intentional. In SDK 0.2.0, omitting the type for BTC selects the real
+`MULTISIG` provider, which requires actual funding and should not be
+silently replaced by a fake provider.
+
+### Escrow with arbitration
+
+```bash
+npm run example:escrow-with-arbitration
+```
+
+This script opens a dispute and resolves it through the assigned arbiter.
+SDK 0.2.0 requires a signed authority decision, so the example uses
+`resolveDisputeWithWallet()` and signs locally with the deterministic
+demo arbiter key.
+
+The one-time `TRUSTED_ARBITRATORS` setup is explained in the file header.
+
+## Next.js demo
+
+The web app intentionally demonstrates the public offer-discovery path.
+
+It does **not** expose a "paste any trade id" viewer. In 0.2.0, trade and
+escrow reads are authenticated and scoped to the trade parties (or other
+explicitly authorized actors). A random authenticated user must not be able
+to inspect another participant's trade.
+
+Use the standalone scripts for the authenticated end-to-end flows.
+
+## Repository map
+
+```text
 src/
-  sails-integration/
-    client.ts          — SailsClient singleton (browser-safe lazy init)
-    intent-builder.ts  — real TradeIntentPayload helpers
-    event-handler.ts   — wraps openp2p.chat()'s WebSocketChannel
-  wallet-mock/          — a real WalletAdapter implementation with FAKE
-                           values — reference for the shape, not a
-                           wallet. Neither example script below needs it;
-                           this protocol's identity layer doesn't require
-                           a wallet at all (see docs/FAQ.md).
-  ui/                    — thin re-exports of @satsails/sdk-react's real
-                           TradeCard/StatusBadge components
-  app/                   — the Next.js pages from the quick start above
+  app/                  Next.js registry-consumer demo
+  sails-integration/    client + small typed integration helpers
+  wallet-mock/          fake WalletAdapter implementation for interface examples
+  ui/                   thin SDK React re-export layer
+
 examples/
-  p2p-bitcoin-trade.ts        — standalone script, the golden path
-  escrow-with-arbitration.ts  — standalone script, real dispute/arbitration
+  p2p-bitcoin-trade.ts
+  escrow-with-arbitration.ts
+
 tests/
-  integration.test.ts   — real unit tests for intent-builder.ts/event-handler.ts (TDD)
+  integration.test.ts
+
 docs/
-  ARCHITECTURE.md        — how the pieces connect, with real sequence diagrams
-  USE_CASES.md            — what's actually provable today vs. planned
+  API.md
+  ARCHITECTURE.md
   FAQ.md
-  API.md                  — index into @satsails/p2p-trading-sdk's real method surface
+  USE_CASES.md
+  UPGRADING.md
 ```
 
-## The two example scripts, in more detail
+## Verification
 
-- **`examples/p2p-bitcoin-trade.ts`** — mirrors `examples/simple-wallet`'s
-  proven pattern: two independent `SailsClient`s (seller, buyer), full
-  identity → publish → discover → trade → chat → escrow flow. Run with
-  `npm run example:p2p-bitcoin-trade`.
+CI runs the same external-consumer path a partner should rely on:
 
-- **`examples/escrow-with-arbitration.ts`** — the same setup, but the
-  buyer raises a dispute and a Trusted Arbitrator resolves it
-  (RFC-007 D4). **Read this file's own header comment before running
-  it** — dispute resolution needs a one-time `TRUSTED_ARBITRATORS`
-  config step on a fresh node, and the script explains exactly what to
-  do (it also runs safely without that step — it just stops with a
-  clear message instead of a dispute that can't be resolved). Run with
-  `npm run example:escrow-with-arbitration`.
+```bash
+npm ci
+npm ls @satsails/p2p-trading-sdk@0.2.0
+npm ls @satsails/sdk-react@0.2.0
+npm ls @satsails/p2p-schemas@0.2.0
+npm test -- --runInBand
+npm run typecheck
+npm run build
+```
 
-## Honesty notes (per this repo's own convention)
+If registry artifacts, lockfile state, public types or the production build
+drift, the starter fails closed.
 
-- Both scripts use the node's default escrow type (`MOCK` on this
-  repo's own local `.env`), not `MULTISIG` — `MULTISIG` is genuinely
-  non-custodial and needs real on-chain funding a script can't
-  automate. See `docs/USE_CASES.md` and each script's own header for
-  why, and what driving real `MULTISIG` by hand looks like.
-- `negotiate()`/`submitProof()`/`releaseAsset()` on the SDK's Intent
-  facade always throw `SailsNotImplementedError` — neither example uses
-  them. See `docs/FAQ.md`.
-- No NFT use case is provable today — no NFT `AssetType` exists. See
-  `docs/USE_CASES.md`.
+## Version policy
+
+The starter pins the Sails packages to the exact verified baseline rather
+than silently floating to a new release.
+
+Upgrades are deliberate: update package versions, regenerate/verify the
+lockfile, run CI, and reconcile any public API changes. See
+[docs/UPGRADING.md](docs/UPGRADING.md).
+
+## Safety / truthfulness notes
+
+- `MOCK` settlement is only for deterministic local/demo coordination
+  flows. It is not evidence that real funds moved.
+- Real BTC settlement is `MULTISIG` and requires its real funding/signing
+  flow.
+- Release-time destination arguments are not destination authority in
+  0.2.0. The beneficiary's registered `PayoutAddress` governs.
+- `submitProof()` and `releaseAsset()` are real in 0.2.0.
+- `negotiate()` remains intentionally unavailable because the real
+  negotiation surface is the persistent `openp2p.chat()` WebSocket
+  channel.
+- `wallet-mock/` demonstrates interface wiring only. Never use it for
+  real keys or funds.
