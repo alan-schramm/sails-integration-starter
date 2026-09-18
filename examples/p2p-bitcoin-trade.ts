@@ -108,7 +108,11 @@ async function main() {
     type: 'MOCK',
   })
   await sellerWallet.settlement.lock(escrow.id)
-  console.log(`    escrow ${escrow.id} locked (type: ${escrow.type})`)
+  const lockedEscrow = await sellerWallet.settlement.get(escrow.id)
+  if (lockedEscrow.status !== 'FUNDS_LOCKED') {
+    throw new Error(`Escrow did not reach FUNDS_LOCKED after lock(); got ${lockedEscrow.status}`)
+  }
+  console.log(`    escrow status after lock: ${lockedEscrow.status} (id: ${lockedEscrow.id}, type: ${lockedEscrow.type})`)
 
   step('Buyer marks the fiat payment as sent (settlement.markPaymentSent)')
   await buyerWallet.settlement.markPaymentSent(escrow.id)
@@ -118,7 +122,13 @@ async function main() {
   const released = await sellerWallet.settlement.release(escrow.id)
   console.log(`    escrow status: ${released.status}, txReleaseId: ${released.txReleaseId}`)
 
-  console.log(`\nDone. Paste this tradeId into the Next.js starter's "View a trade" section:\n\n    ${trade.id}\n`)
+  const finalTrade = await sellerWallet.openp2p.getTrade(trade.id)
+  const finalEscrow = await sellerWallet.settlement.get(escrow.id)
+
+  console.log(
+    `\nEVIDENCE tradeId=${finalTrade.id} tradeStatus=${finalTrade.status} escrowId=${finalEscrow.id} escrowStatus=${finalEscrow.status} escrowType=${finalEscrow.type}`
+  )
+  console.log(`\nDone. External public-SDK lifecycle completed for trade ${trade.id}.\n`)
 }
 
 main().catch((err) => {
