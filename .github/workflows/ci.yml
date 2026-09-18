@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Install locked registry dependencies
+        run: npm ci
+
+      - name: Verify published Sails package baseline
+        run: |
+          npm ls @satsails/p2p-trading-sdk@0.2.0
+          npm ls @satsails/sdk-react@0.2.0
+          npm ls @satsails/p2p-schemas@0.2.0
+
+      - name: Unit tests
+        run: npm test -- --runInBand
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Production build
+        run: npm run build
