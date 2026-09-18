@@ -1,0 +1,230 @@
+name: Destination Authority Beta Lifecycle
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/destination-authority-beta.yml'
+      - 'examples/destination-authority.ts'
+      - 'package.json'
+      - 'package-lock.json'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  PROTOCOL_REPOSITORY: alan-schramm/Sails-Protocol
+  PROTOCOL_SOURCE_SHA: 9ed9c812520680198ac30d7d82ea5303466a2fcf
+  STARTER_BASE_URL: http://127.0.0.1:3000
+  STARTER_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+
+jobs:
+  destination-authority:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: password
+          POSTGRES_DB: sails_protocol
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - name: Checkout exact external starter source
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ env.STARTER_SOURCE_SHA }}
+          path: starter
+
+      - name: Checkout exact Sails Protocol node source
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ env.PROTOCOL_REPOSITORY }}
+          ref: ${{ env.PROTOCOL_SOURCE_SHA }}
+          path: sails-protocol
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      - name: Install external registry consumer
+        working-directory: starter
+        run: npm ci
+
+      - name: Record published SDK baseline
+        working-directory: starter
+        run: |
+          npm ls @satsails/p2p-trading-sdk@0.2.0
+          npm ls @satsails/sdk-react@0.2.0
+          npm ls @satsails/p2p-schemas@0.2.0
+          node - <<'NODE' > registry-baseline.json
+          const fs = require('fs')
+          const lock = JSON.parse(fs.readFileSync('package-lock.json', 'utf8'))
+          const names = ['@satsails/p2p-trading-sdk','@satsails/sdk-react','@satsails/p2p-schemas']
+          const packages = Object.fromEntries(names.map((name) => {
+            const row = lock.packages['node_modules/' + name]
+            return [name, row ? { version: row.version, resolved: row.resolved, integrity: row.integrity } : null]
+          }))
+          console.log(JSON.stringify({ packages }, null, 2))
+          NODE
+
+      - name: Install exact Sails Protocol node source
+        working-directory: sails-protocol
+        run: npm ci
+
+      - name: Build node workspace packages
+        working-directory: sails-protocol
+        run: npm run build -w @sails/core -w @satsails/p2p-schemas -w @satsails/p2p-trading-sdk
+
+      - name: Generate Prisma client
+        working-directory: sails-protocol
+        run: npm run db:generate
+
+      - name: Apply database migrations
+        working-directory: sails-protocol
+        env:
+          DATABASE_URL: postgresql://postgres:password@127.0.0.1:5432/sails_protocol
+        run: npm run db:migrate
+
+      - name: Start bootstrap node without trusted arbiter
+        working-directory: sails-protocol
+        env:
+          DATABASE_URL: postgresql://postgres:password@127.0.0.1:5432/sails_protocol
+          REDIS_URL: redis://127.0.0.1:6379
+          PORT: '3000'
+          HOST: 0.0.0.0
+          NODE_ENV: development
+          MOCK_ESCROW: 'true'
+          MOCK_SETTLEMENT: 'true'
+          AUTO_SETTLE_ON_MATCH: 'false'
+          ENFORCE_CAPABILITIES: 'false'
+          REQUIRE_DUAL_APPROVAL_RELEASE: 'false'
+          QVAC_AUTO_RESOLUTION_ENABLED: 'false'
+          SOCIAL_ENGINEERING_DETECTION: 'false'
+          TRUSTED_ARBITRATORS: ''
+        run: |
+          nohup ./node_modules/.bin/ts-node --transpile-only src/main.ts > ../sails-node.log 2>&1 &
+          echo $! > ../sails-node.pid
+
+      - name: Wait for bootstrap node health
+        run: |
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent http://127.0.0.1:3000/health > health-bootstrap.json; then exit 0; fi
+            sleep 2
+          done
+          cat sails-node.log >&2 || true
+          exit 1
+
+      - name: Bootstrap deterministic arbiter identity through public SDK
+        working-directory: starter
+        env:
+          SAILS_BASE_URL: ${{ env.STARTER_BASE_URL }}
+          SAILS_ARBITER_BOOTSTRAP_ONLY: 'true'
+        run: |
+          npm run example:destination-authority 2>&1 | tee destination-bootstrap.log
+          ARBITER_ID=$(sed -n 's/^ARBITER_EVIDENCE participantId=//p' destination-bootstrap.log | tail -1)
+          test -n "$ARBITER_ID"
+          echo "ARBITER_ID=$ARBITER_ID" >> "$GITHUB_ENV"
+
+      - name: Stop bootstrap node and prove port is closed
+        run: |
+          kill "$(cat sails-node.pid)" || true
+          for attempt in $(seq 1 30); do
+            if ! curl --silent --fail http://127.0.0.1:3000/health >/dev/null 2>&1; then exit 0; fi
+            sleep 1
+          done
+          echo "bootstrap node still responds after shutdown" >&2
+          exit 1
+
+      - name: Start node with exact trusted arbiter
+        working-directory: sails-protocol
+        env:
+          DATABASE_URL: postgresql://postgres:password@127.0.0.1:5432/sails_protocol
+          REDIS_URL: redis://127.0.0.1:6379
+          PORT: '3000'
+          HOST: 0.0.0.0
+          NODE_ENV: development
+          MOCK_ESCROW: 'true'
+          MOCK_SETTLEMENT: 'true'
+          AUTO_SETTLE_ON_MATCH: 'false'
+          ENFORCE_CAPABILITIES: 'false'
+          REQUIRE_DUAL_APPROVAL_RELEASE: 'false'
+          QVAC_AUTO_RESOLUTION_ENABLED: 'false'
+          SOCIAL_ENGINEERING_DETECTION: 'false'
+          TRUSTED_ARBITRATORS: ${{ env.ARBITER_ID }}
+        run: |
+          nohup ./node_modules/.bin/ts-node --transpile-only src/main.ts > ../sails-node-final.log 2>&1 &
+          echo $! > ../sails-node-final.pid
+
+      - name: Wait for final node health
+        run: |
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent http://127.0.0.1:3000/health > health-final.json; then exit 0; fi
+            sleep 2
+          done
+          cat sails-node-final.log >&2 || true
+          exit 1
+
+      - name: Run external adversarial destination scenario
+        working-directory: starter
+        env:
+          SAILS_BASE_URL: ${{ env.STARTER_BASE_URL }}
+          SAILS_EXPECTED_ARBITER_ID: ${{ env.ARBITER_ID }}
+        run: npm run example:destination-authority 2>&1 | tee destination-authority.log
+
+      - name: Verify destination authority evidence
+        working-directory: starter
+        run: |
+          grep -Fq 'DESTINATION_INPUT beneficiary=beneficiary-authoritative-btc-address attacker=attacker-substituted-btc-address' destination-authority.log
+          grep -Eq 'DESTINATION_EVIDENCE txReleaseId=mock-release-[^ ]+-to-benefici beneficiaryPrefix=benefici attackerPrefix=attacker substitutionRejected=true' destination-authority.log
+          grep -Eq 'EVIDENCE tradeId=[^ ]+ tradeStatus=COMPLETED escrowId=[^ ]+ escrowStatus=COMPLETED escrowType=MOCK disputeId=[^ ]+ disputeStatus=RESOLVED ruling=RELEASE arbiterId=[^ ]+ destinationAuthority=BENEFICIARY' destination-authority.log
+
+      - name: Write scenario manifest
+        if: always()
+        working-directory: starter
+        run: |
+          {
+            echo "scenario=Arbiter cannot substitute beneficiary payout destination"
+            echo "protocol_source_sha=${PROTOCOL_SOURCE_SHA}"
+            echo "starter_source_sha=${STARTER_SOURCE_SHA}"
+            echo "starter_checkout_sha=$(git rev-parse HEAD)"
+            echo "command=npm run example:destination-authority"
+            echo "settlement_scope=MOCK destination-authority orchestration evidence"
+          } > destination-authority-manifest.txt
+
+      - name: Upload durable destination evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: destination-authority-beta-${{ github.run_id }}
+          path: |
+            starter/destination-authority.log
+            starter/destination-bootstrap.log
+            starter/registry-baseline.json
+            starter/destination-authority-manifest.txt
+            health-bootstrap.json
+            health-final.json
+            sails-node.log
+            sails-node-final.log
+          if-no-files-found: warn
+          retention-days: 30
