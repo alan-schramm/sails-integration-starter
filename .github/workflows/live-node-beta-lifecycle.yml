@@ -16,6 +16,7 @@ env:
   PROTOCOL_REPOSITORY: alan-schramm/Sails-Protocol
   PROTOCOL_SOURCE_SHA: a66e27bf64766cdf2b3e2acc41aefe90a71b95f7
   STARTER_BASE_URL: http://127.0.0.1:3000
+  STARTER_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
 
 jobs:
   live-public-sdk-lifecycle:
@@ -48,9 +49,10 @@ jobs:
           --health-retries 10
 
     steps:
-      - name: Checkout external starter
+      - name: Checkout exact external starter source
         uses: actions/checkout@v6
         with:
+          ref: ${{ env.STARTER_SOURCE_SHA }}
           path: starter
 
       - name: Checkout exact Sails Protocol node source
@@ -158,6 +160,7 @@ jobs:
           grep -Fq 'buyer session established' live-lifecycle.log
           grep -Fq 'published' live-lifecycle.log
           grep -Fq 'payment marked sent' live-lifecycle.log
+          grep -Fq 'escrow status after lock: FUNDS_LOCKED' live-lifecycle.log
 
       - name: Write scenario manifest
         if: always()
@@ -167,7 +170,8 @@ jobs:
             echo "scenario=External SDK consumer completes live-node P2P lifecycle"
             echo "protocol_repository=${PROTOCOL_REPOSITORY}"
             echo "protocol_source_sha=${PROTOCOL_SOURCE_SHA}"
-            echo "starter_source_sha=${GITHUB_SHA}"
+            echo "starter_source_sha=${STARTER_SOURCE_SHA}"
+            echo "starter_checkout_sha=$(git rev-parse HEAD)"
             echo "command=npm run example:p2p-bitcoin-trade"
             echo "settlement_scope=MOCK lifecycle validation only; no real BTC movement"
           } > scenario-manifest.txt
