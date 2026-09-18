@@ -10,7 +10,8 @@
     "example:p2p-bitcoin-trade": "ts-node --transpile-only examples/p2p-bitcoin-trade.ts",
     "example:escrow-with-arbitration": "ts-node --transpile-only examples/escrow-with-arbitration.ts",
     "test": "jest",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "example:nonparty-authority": "ts-node --transpile-only examples/nonparty-authority.ts"
   },
   "dependencies": {
     "@satsails/p2p-trading-sdk": "0.2.0",
