@@ -129,7 +129,7 @@ jobs:
           SOCIAL_ENGINEERING_DETECTION: 'false'
           TRUSTED_ARBITRATORS: ''
         run: |
-          nohup npx ts-node --transpile-only src/main.ts > ../sails-node-bootstrap.log 2>&1 &
+          nohup ./node_modules/.bin/ts-node --transpile-only src/main.ts > ../sails-node-bootstrap.log 2>&1 &
           echo $! > ../sails-node.pid
 
       - name: Wait for bootstrap node health
@@ -157,16 +157,18 @@ jobs:
           echo "ARBITER_PARTICIPANT_ID=$ARBITER_ID" >> "$GITHUB_ENV"
           echo "$ARBITER_ID" > arbiter-participant-id.txt
 
-      - name: Stop bootstrap node
+      - name: Stop bootstrap node and prove port is closed
         run: |
           kill "$(cat sails-node.pid)"
           for attempt in $(seq 1 30); do
-            if ! kill -0 "$(cat sails-node.pid)" 2>/dev/null; then
+            if ! curl --fail --silent http://127.0.0.1:3000/health >/dev/null 2>&1; then
+              echo "Bootstrap node stopped and port 3000 is closed"
               exit 0
             fi
             sleep 1
           done
-          echo "Bootstrap node did not stop cleanly" >&2
+          echo "Bootstrap node still answers on port 3000 after shutdown" >&2
+          ps -ef | grep -E 'ts-node|src/main.ts' | grep -v grep >&2 || true
           exit 1
 
       - name: Start exact-source node with deterministic trusted arbiter
@@ -186,7 +188,7 @@ jobs:
           SOCIAL_ENGINEERING_DETECTION: 'false'
           TRUSTED_ARBITRATORS: ${{ env.ARBITER_PARTICIPANT_ID }}
         run: |
-          nohup npx ts-node --transpile-only src/main.ts > ../sails-node-dispute.log 2>&1 &
+          nohup ./node_modules/.bin/ts-node --transpile-only src/main.ts > ../sails-node-dispute.log 2>&1 &
           echo $! > ../sails-node.pid
 
       - name: Wait for dispute node health
