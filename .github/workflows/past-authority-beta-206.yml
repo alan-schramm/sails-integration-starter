@@ -1,0 +1,197 @@
+name: Past Authority Beta Scenario 206
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/past-authority-beta-206.yml'
+      - 'examples/past-authority-beta-206.ts'
+      - 'package.json'
+      - 'package-lock.json'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  PROTOCOL_REPOSITORY: alan-schramm/Sails-Protocol
+  PROTOCOL_SOURCE_SHA: deb4537726c4376c7693f0804fbfd7389e322e30
+  STARTER_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+  STARTER_BASE_URL: http://127.0.0.1:3000
+
+jobs:
+  past-authority-current-authority:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: password
+          POSTGRES_DB: sails_protocol
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - name: Checkout exact external starter source
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ env.STARTER_SOURCE_SHA }}
+          path: starter
+
+      - name: Checkout exact Sails Protocol node source
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ env.PROTOCOL_REPOSITORY }}
+          ref: ${{ env.PROTOCOL_SOURCE_SHA }}
+          path: sails-protocol
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      - name: Install external registry consumer
+        working-directory: starter
+        run: npm ci
+
+      - name: Record published SDK baseline
+        working-directory: starter
+        run: |
+          npm ls @satsails/p2p-trading-sdk@0.2.0
+          npm ls @satsails/sdk-react@0.2.0
+          npm ls @satsails/p2p-schemas@0.2.0
+          node - <<'NODE' > registry-baseline.json
+          const fs = require('fs')
+          const lock = JSON.parse(fs.readFileSync('package-lock.json', 'utf8'))
+          const names = [
+            '@satsails/p2p-trading-sdk',
+            '@satsails/sdk-react',
+            '@satsails/p2p-schemas',
+          ]
+          const packages = Object.fromEntries(names.map((name) => {
+            const row = lock.packages['node_modules/' + name]
+            return [name, row ? { version: row.version, resolved: row.resolved, integrity: row.integrity } : null]
+          }))
+          console.log(JSON.stringify({ packages }, null, 2))
+          NODE
+
+      - name: Install exact protocol source
+        working-directory: sails-protocol
+        run: npm ci
+
+      - name: Build node workspace packages
+        working-directory: sails-protocol
+        run: npm run build -w @sails/core -w @satsails/p2p-schemas -w @satsails/p2p-trading-sdk
+
+      - name: Generate Prisma client
+        working-directory: sails-protocol
+        run: npm run db:generate
+
+      - name: Apply database migrations
+        working-directory: sails-protocol
+        env:
+          DATABASE_URL: postgresql://postgres:password@127.0.0.1:5432/sails_protocol
+        run: npm run db:migrate
+
+      - name: Start node with rail-scoped MOCK market arbitration
+        working-directory: sails-protocol
+        env:
+          DATABASE_URL: postgresql://postgres:password@127.0.0.1:5432/sails_protocol
+          REDIS_URL: redis://127.0.0.1:6379
+          PORT: '3000'
+          HOST: 0.0.0.0
+          NODE_ENV: development
+          MOCK_ESCROW: 'true'
+          MOCK_SETTLEMENT: 'true'
+          AUTO_SETTLE_ON_MATCH: 'false'
+          ENFORCE_CAPABILITIES: 'false'
+          REQUIRE_DUAL_APPROVAL_RELEASE: 'false'
+          QVAC_AUTO_RESOLUTION_ENABLED: 'false'
+          SOCIAL_ENGINEERING_DETECTION: 'false'
+          TRUSTED_ARBITRATORS: ''
+          ARBITRATION_MODE: trusted-list
+          ARBITRATION_POLICY_BY_ESCROW_TYPE: MOCK=market
+        run: |
+          nohup ./node_modules/.bin/ts-node --transpile-only src/main.ts > ../sails-node-beta-206.log 2>&1 &
+          echo $! > ../sails-node.pid
+
+      - name: Wait for node health
+        run: |
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent http://127.0.0.1:3000/health > health-beta-206.json; then
+              cat health-beta-206.json
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Sails node did not become healthy" >&2
+          cat sails-node-beta-206.log >&2 || true
+          exit 1
+
+      - name: Run Beta Scenario 206 through published SDK
+        working-directory: starter
+        env:
+          SAILS_BASE_URL: ${{ env.STARTER_BASE_URL }}
+        run: |
+          npm run example:past-authority-beta-206 2>&1 | tee beta-206.log
+
+      - name: Verify authority-transition evidence
+        working-directory: starter
+        run: |
+          grep -Fq 'FIRST_RULING_STATUS=RESOLVED' beta-206.log
+          grep -Fq 'APPEAL_STATUS=APPEALED' beta-206.log
+          grep -Fq 'APPEAL_ROUND=1' beta-206.log
+          grep -Fq 'STALE_REJECTION_CLASS=SailsForbiddenError' beta-206.log
+          grep -Fq 'STALE_REJECTION_CODE=FORBIDDEN' beta-206.log
+          grep -Fq 'STALE_REJECTION_STATUS=403' beta-206.log
+          grep -Fq 'BETA_206_RESULT=PASS' beta-206.log
+          grep -Eq 'EVIDENCE .*status=APPEALED .*appealRound=1 .*ruling=null .*staleCode=FORBIDDEN .*staleStatus=403' beta-206.log
+
+      - name: Write scenario manifest
+        if: always()
+        working-directory: starter
+        run: |
+          {
+            echo "scenario=#206 Previous arbiter cannot resolve after appeal reassignment"
+            echo "property=Past Authority != Current Authority"
+            echo "protocol_source_sha=${PROTOCOL_SOURCE_SHA}"
+            echo "starter_source_sha=${STARTER_SOURCE_SHA}"
+            echo "starter_checkout_sha=$(git rev-parse HEAD)"
+            echo "sdk=@satsails/p2p-trading-sdk@0.2.0 from public registry"
+            echo "arbitration_mode=trusted-list"
+            echo "arbitration_policy_by_escrow_type=MOCK=market"
+            echo "settlement_scope=MOCK only; MULTISIG remains fixed/trusted"
+            echo "exclusions=no in-flight resolve-vs-appeal race; no stale pending tx finalize; no second-arbiter economic execution; no real settlement rail"
+          } > beta-206-manifest.txt
+
+      - name: Upload durable Beta 206 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: beta-206-past-authority-${{ github.run_id }}
+          path: |
+            starter/beta-206.log
+            starter/registry-baseline.json
+            starter/beta-206-manifest.txt
+            health-beta-206.json
+            sails-node-beta-206.log
+          if-no-files-found: warn
+          retention-days: 30
