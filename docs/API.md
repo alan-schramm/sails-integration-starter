@@ -1,115 +1,137 @@
-# API reference (index)
+# Public API quick reference
 
-A thin pointer into `@satsails/p2p-trading-sdk`'s and `@satsails/sdk-react`'s real,
-current public surface — verified directly against source at the time
-of writing, not against `docs/SDK_GUIDE.md`'s §4 or
-`docs/DEVELOPER_JOURNEY.md`'s code snippets, both confirmed stale
-elsewhere in this repo (wrong `SailsClient` constructor shape, methods
-that don't match reality). For full JSDoc on any method below, read the
-linked source file directly — it's kept accurate because the SDK's own
-tests exercise it.
+This file is a starter-oriented index for the published
+`@satsails/p2p-trading-sdk@0.2.0` surface. It is not a second protocol
+specification.
 
-## `SailsClient` (`packages/sails-sdk/src/client.ts`)
+## Client
 
 ```ts
-new SailsClient({ baseUrl, fetchImpl?, webSocketImpl?, wallet? })
+import { SailsClient } from '@satsails/p2p-trading-sdk'
+
+const client = new SailsClient({
+  baseUrl: 'http://localhost:3000',
+})
 ```
 
-Exposes module instances directly: `.identity` (alias `.auth`),
-`.reputation` (alias `.trustScore`), `.liquidity` (alias `.offers`),
-`.openp2p` (alias `.trades`), `.settlement` (alias `.escrow`), `.peers`,
-`.capabilities`. Also exposes a six-verb Intent facade directly on the
-client — see the caveat in `FAQ.md` about which three of those six
-verbs actually work.
+Main modules:
 
-## `identity` — `packages/sails-sdk/src/modules/identity.ts`
+- `client.identity`
+- `client.liquidity`
+- `client.openp2p`
+- `client.settlement`
+- `client.reputation`
+- `client.peers`
+- `client.capabilities`
 
-| Method | Auth required | Notes |
-|---|---|---|
-| `create(keypair?, displayName?)` | no | registers a Participant; generates a keypair if omitted |
-| `authenticate(keypair)` | no | full challenge→sign→verify flow, stores the session token |
-| `challenge(publicKeyHex)` | no | lower-level, rarely needed directly |
-| `get(participantId)` | no | |
-| `me()` | yes | |
+The Intent facade is also exposed on the client.
 
-## `liquidity` — `packages/sails-sdk/src/modules/liquidity.ts`
+## Identity
 
-| Method | Auth required |
+Common methods:
+
+- `identity.create()`
+- `identity.createWithPublicKey()`
+- `identity.authenticate()`
+- `identity.authenticateWithWallet()`
+- `identity.get()`
+- `identity.me()`
+
+Authenticated calls store/use the session token inside the client transport.
+
+## Liquidity
+
+- `liquidity.publish()`
+- `liquidity.discover()`
+- `liquidity.getOffer()`
+- `liquidity.book()`
+- `liquidity.updateStatus()`
+
+Offer discovery is the public read path used by the Next.js demo.
+
+## OpenP2P
+
+- `openp2p.trade(offerId, amount, idempotencyKey?)`
+- `openp2p.getTrades()`
+- `openp2p.getTrade()`
+- `openp2p.getTradeByIntent()`
+- `openp2p.updateTradeStatus()`
+- `openp2p.getMessages()`
+- `openp2p.reconcileTrade()`
+- `openp2p.chat()`
+
+Trade reads are authenticated and participant-scoped in 0.2.0.
+
+`chat()` returns the persistent WebSocket channel used for real negotiation.
+
+## Settlement
+
+Important integration methods:
+
+- `settlement.create()`
+- `settlement.get()`
+- `settlement.lock()`
+- `settlement.markPaymentSent()`
+- `settlement.release()`
+- `settlement.refund()`
+- `settlement.dispute()`
+- `settlement.resolveDisputeWithWallet()`
+- `settlement.setPayoutAddress()`
+- `settlement.getPayoutAddress()`
+
+For BTC, omitting `type` selects the recommended real `MULTISIG` provider.
+Use `type: 'MOCK'` only when a fake/demo settlement is explicitly intended.
+
+Destination authority belongs to the beneficiary's registered payout address;
+a release-time destination argument is not authoritative in 0.2.0.
+
+## Intent facade
+
+Current 0.2.0 truth:
+
+| Method | Status |
 |---|---|
-| `publish(input)` | yes |
-| `discover({asset, side, limit?, offset?})` | no |
-| `getOffer(offerId)` | no |
-| `book(asset)` | no |
-| `updateStatus(offerId, status)` | yes |
-| `match(input)` | no |
+| `createIntent()` | real |
+| `cancelIntent()` | real |
+| `submitProof()` | real |
+| `releaseAsset()` | real |
+| `dispute()` | real |
+| `negotiate()` | intentionally unavailable; use `openp2p.chat()` |
 
-## `openp2p` — `packages/sails-sdk/src/modules/openp2p.ts`
+## React binding
 
-| Method | Auth required |
-|---|---|
-| `trade(offerId, amount)` | yes |
-| `getTrades(pagination?)` | yes |
-| `getTrade(tradeId)` | no |
-| `getTradeByIntent(intentId)` | no |
-| `updateTradeStatus(tradeId, status)` | yes |
-| `getMessages(tradeId)` | no |
-| `chat(tradeId)` → `WebSocketChannel` | yes (throws if no session) |
+`@satsails/sdk-react@0.2.0` provides the provider/hooks/components layer,
+including:
 
-## `settlement` — `packages/sails-sdk/src/modules/settlement.ts`
+- `SailsProvider`
+- `useSailsClient()`
+- `useSailsTrade()`
+- `useSailsTrades()`
+- `useSailsEscrow()`
+- `TradeCard`
+- `TradeStatusBadge`
+- `EscrowStatusBadge`
+- `ReputationBadge`
 
-| Method | Auth required | Notes |
-|---|---|---|
-| `create(input)` | yes | `type` optional — see `FAQ.md` |
-| `get(escrowId)` | no | |
-| `submitKey(escrowId, pubkeyHex)` | yes | client-held-keys providers only |
-| `lock(escrowId)` | yes | |
-| `markPaymentSent(escrowId)` | yes | |
-| `release(escrowId, toAddress)` | yes | |
-| `dispute(escrowId, reason, evidence?)` | yes | needs `TRUSTED_ARBITRATORS` configured — see `FAQ.md` |
-| `refund(escrowId)` | yes | |
-| `initiateRelease`/`initiateRefund`/`submitTransactionSignature`/`getPendingTransaction` | yes/no | Phase 2 signature-collection flow, `MULTISIG` only |
-| `resolveDispute(disputeId, ruling, releaseToAddress?)` | yes | caller must be the dispute's assigned arbiter |
+The React hooks do not bypass SDK authorization rules. A hook backed by an
+authenticated SDK call still needs the appropriate authenticated client
+session.
 
-## `reputation` — `packages/sails-sdk/src/modules/reputation.ts`
+## WalletAdapter
 
-`get(participantId)`, `leaderboard(limit?)`, `rate(input)` (yes, auth required).
-
-## `peers` — `packages/sails-sdk/src/modules/peers.ts`
-
-`start(secretKeyBase64)`, `stop()`, `status()`, `joinTopic(topic)`,
-`joinTrade(tradeId)`, `broadcastOffer(input)` — the P2P transport layer;
-none of the examples in this starter use it directly.
-
-## `capabilities` — `packages/sails-sdk/src/modules/capabilities.ts`
-
-`register(input)`, `list(participantId)`, `revoke(grantId)`,
-`registerFromWallet(wallet)` (RFC-013/014 capability grants).
-
-## `@satsails/sdk-react` — `packages/sdk-react/src/index.ts`
-
-- `SailsProvider({client, children})`, `useSailsContext()`, `useSailsClient()`
-- `useSailsTrade(tradeId)` — no auth required
-- `useSailsTrades({limit?})` — auth required, infinite query
-- `useSailsEscrow(escrowId)` — one query + `lock`/`markPaymentSent`/`release`/`refund`/`dispute` mutations, auto-invalidating
-- `TradeCard`, `TradeStatusBadge`, `EscrowStatusBadge`, `ReputationBadge`, `ToastProvider`/`useToast`/`Toast`, `Skeleton`
-
-Full setup requirements (the `QueryClientProvider` + `SailsProvider`
-pairing) are documented in `packages/sdk-react/README.md`, which this
-starter's own `src/app/providers.tsx` follows exactly.
-
-## `WalletAdapter` — `packages/sails-sdk/src/wallet-adapter.ts`
+Relevant shape:
 
 ```ts
 interface WalletAdapter {
   getPeerId(): Promise<string>
-  getAddress(asset: AssetType): Promise<string>
-  getBalance(asset: AssetType): Promise<string>
-  signTransaction(asset: AssetType, tx: unknown): Promise<unknown>
-  broadcastTransaction(asset: AssetType, signedTx: unknown): Promise<string>
+  getAddress(asset: string): Promise<string>
+  getBalance(asset: string): Promise<string>
+  signTransaction(asset: string, tx: unknown): Promise<unknown>
+  broadcastTransaction(asset: string, signedTx: unknown): Promise<string>
   getCapabilities(): Promise<WalletCapabilitiesDeclaration>
+  signMessage(message: Uint8Array): Promise<Uint8Array>
+  disconnect?(): Promise<void>
 }
 ```
 
-`src/wallet-mock/index.ts` in this starter implements it with fake,
-deterministic-per-instance values — a reference for the shape, not a
-real wallet.
+The starter's mock adapter implements this shape with fake values only.
