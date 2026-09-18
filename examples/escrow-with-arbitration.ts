@@ -22,13 +22,17 @@
  *      (`TRUSTED_ARBITRATORS=<id>`) and restart `npm run dev`.
  *   3. Run this script again — it now resolves the dispute for real.
  *
- * Escrow type: unset, same MOCK-by-default reasoning as
- * `p2p-bitcoin-trade.ts` — see that file's header. The dispute/arbitration
- * *protocol* flow exercised here (raiseDispute -> assign -> resolveDispute
- * -> releaseFunds) is identical regardless of which SettlementProvider
- * ultimately moves funds.
+ * Escrow type: this standalone demo passes `type: 'MOCK'` explicitly.
+ * BTC without an explicit type now selects the real MULTISIG provider in
+ * SDK 0.2.0, which correctly requires real funding and is not appropriate
+ * for an unattended demo.
  *
- * Run: npm run example:escrow-with-arbitration -w @sails/example-integration-starter
+ * Resolution uses `resolveDisputeWithWallet()`: SDK 0.2.0 requires a
+ * signed authority decision from the assigned arbiter. The deterministic
+ * demo arbiter signs that decision locally; its secret key never goes to
+ * the Sails node.
+ *
+ * Run: npm run example:escrow-with-arbitration
  */
 import { createHash } from 'node:crypto'
 import nacl from 'tweetnacl'
@@ -95,8 +99,19 @@ async function main() {
   const trade = await buyerWallet.openp2p.trade(offer.id, '0.01')
   console.log(`    trade ${trade.id} created against offer ${offer.id}`)
 
+  step('Buyer registers the authoritative BTC payout address')
+  await buyerWallet.settlement.setPayoutAddress({
+    asset: 'BTC',
+    address: 'example-buyer-payout-address',
+  })
+
   step('Seller creates and locks the escrow, buyer marks payment sent')
-  const escrow = await sellerWallet.settlement.create({ tradeId: trade.id, lockedAmount: '0.01', asset: 'BTC' })
+  const escrow = await sellerWallet.settlement.create({
+    tradeId: trade.id,
+    lockedAmount: '0.01',
+    asset: 'BTC',
+    type: 'MOCK',
+  })
   await sellerWallet.settlement.lock(escrow.id)
   await buyerWallet.settlement.markPaymentSent(escrow.id)
   console.log(`    escrow ${escrow.id} locked and payment marked sent`)
@@ -127,8 +142,16 @@ async function main() {
     return
   }
 
-  step('Arbiter reviews and rules RELEASE (funds go to the buyer\'s stated address)')
-  const resolved = await arbiterClient.settlement.resolveDispute(dispute.id, 'RELEASE', 'example-buyer-payout-address')
+  step('Arbiter reviews and signs a RELEASE authority decision')
+  const arbiterSigner = {
+    signMessage: async (message: Uint8Array): Promise<Uint8Array> =>
+      nacl.sign.detached(message, arbiterKeypair.secretKey),
+  }
+  const resolved = await arbiterClient.settlement.resolveDisputeWithWallet(
+    dispute.id,
+    'RELEASE',
+    arbiterSigner,
+  )
   console.log(`    dispute ${resolved.id} resolved: status=${resolved.status}, ruling=${resolved.ruling}`)
 
   const finalEscrow = await sellerWallet.settlement.get(escrow.id)

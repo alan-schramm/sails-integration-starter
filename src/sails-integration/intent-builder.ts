@@ -1,16 +1,10 @@
 /**
- * Fase 6 — real helpers for building `TradeIntentPayload` objects for
- * `SailsClient.createIntent('TradeIntent', payload)` — the real,
- * working entry point of the six-verb intent facade
- * (`packages/sails-sdk/src/intent-facade.ts`). Deliberately no helpers
- * for `negotiate()`/`submitProof()`/`releaseAsset()` — those three
- * throw `SailsNotImplementedError` unconditionally today (verified by
- * reading `intent-facade.ts` directly before writing this file); a
- * "builder" for calls that always fail would be dishonest scaffolding,
- * not a real integration helper.
+ * Helpers for the published SDK 0.2.0 TradeIntentPayload shape.
  *
- * `TradeIntentPayload`'s real shape (`packages/sails-sdk/src/types.ts`)
- * has only `asset`/`side` as required — everything else is optional.
+ * Only negotiate() remains intentionally unavailable on the Intent facade.
+ * submitProof(), releaseAsset(), dispute(), createIntent() and cancelIntent()
+ * are real public surfaces. This file only builds TradeIntent payloads; it
+ * does not duplicate protocol validation.
  */
 import type { TradeIntentPayload, AssetType, TradeSide } from '@satsails/p2p-trading-sdk'
 
