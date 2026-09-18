@@ -1,0 +1,187 @@
+name: Live Node Beta Lifecycle
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/live-node-beta-lifecycle.yml'
+      - 'examples/p2p-bitcoin-trade.ts'
+      - 'package.json'
+      - 'package-lock.json'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  PROTOCOL_REPOSITORY: alan-schramm/Sails-Protocol
+  PROTOCOL_SOURCE_SHA: a66e27bf64766cdf2b3e2acc41aefe90a71b95f7
+  STARTER_BASE_URL: http://127.0.0.1:3000
+
+jobs:
+  live-public-sdk-lifecycle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: password
+          POSTGRES_DB: sails_protocol
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - name: Checkout external starter
+        uses: actions/checkout@v6
+        with:
+          path: starter
+
+      - name: Checkout exact Sails Protocol node source
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ env.PROTOCOL_REPOSITORY }}
+          ref: ${{ env.PROTOCOL_SOURCE_SHA }}
+          path: sails-protocol
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      - name: Install external registry consumer
+        working-directory: starter
+        run: npm ci
+
+      - name: Record published SDK baseline
+        working-directory: starter
+        run: |
+          npm ls @satsails/p2p-trading-sdk@0.2.0
+          npm ls @satsails/sdk-react@0.2.0
+          npm ls @satsails/p2p-schemas@0.2.0
+          node - <<'NODE' > registry-baseline.json
+          const fs = require('fs')
+          const lock = JSON.parse(fs.readFileSync('package-lock.json', 'utf8'))
+          const names = [
+            '@satsails/p2p-trading-sdk',
+            '@satsails/sdk-react',
+            '@satsails/p2p-schemas',
+          ]
+          const packages = Object.fromEntries(names.map((name) => {
+            const key = 'node_modules/' + name
+            const row = lock.packages[key]
+            return [name, row ? { version: row.version, resolved: row.resolved, integrity: row.integrity } : null]
+          }))
+          console.log(JSON.stringify({ packages }, null, 2))
+          NODE
+
+      - name: Install exact Sails Protocol node source
+        working-directory: sails-protocol
+        run: npm ci
+
+      - name: Build node workspace packages
+        working-directory: sails-protocol
+        run: npm run build -w @sails/core -w @satsails/p2p-schemas -w @satsails/p2p-trading-sdk
+
+      - name: Generate Prisma client
+        working-directory: sails-protocol
+        run: npm run db:generate
+
+      - name: Apply database migrations
+        working-directory: sails-protocol
+        env:
+          DATABASE_URL: postgresql://postgres:password@127.0.0.1:5432/sails_protocol
+        run: npm run db:migrate
+
+      - name: Start exact-source Sails node
+        working-directory: sails-protocol
+        env:
+          DATABASE_URL: postgresql://postgres:password@127.0.0.1:5432/sails_protocol
+          REDIS_URL: redis://127.0.0.1:6379
+          PORT: '3000'
+          HOST: 0.0.0.0
+          NODE_ENV: development
+          MOCK_ESCROW: 'true'
+          MOCK_SETTLEMENT: 'true'
+          AUTO_SETTLE_ON_MATCH: 'false'
+          ENFORCE_CAPABILITIES: 'false'
+          REQUIRE_DUAL_APPROVAL_RELEASE: 'false'
+          QVAC_AUTO_RESOLUTION_ENABLED: 'false'
+          SOCIAL_ENGINEERING_DETECTION: 'false'
+          TRUSTED_ARBITRATORS: ''
+        run: |
+          nohup npx ts-node --transpile-only src/main.ts > ../sails-node.log 2>&1 &
+          echo $! > ../sails-node.pid
+
+      - name: Wait for live node health
+        run: |
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent http://127.0.0.1:3000/health > health.json; then
+              cat health.json
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Sails node did not become healthy" >&2
+          cat sails-node.log >&2 || true
+          exit 1
+
+      - name: Run external public-SDK lifecycle
+        working-directory: starter
+        env:
+          SAILS_BASE_URL: ${{ env.STARTER_BASE_URL }}
+        run: |
+          npm run example:p2p-bitcoin-trade 2>&1 | tee live-lifecycle.log
+
+      - name: Verify bounded lifecycle evidence
+        working-directory: starter
+        run: |
+          grep -Eq 'EVIDENCE tradeId=[^ ]+ tradeStatus=[^ ]+ escrowId=[^ ]+ escrowStatus=COMPLETED escrowType=MOCK' live-lifecycle.log
+          grep -Fq 'seller session established' live-lifecycle.log
+          grep -Fq 'buyer session established' live-lifecycle.log
+          grep -Fq 'published' live-lifecycle.log
+          grep -Fq 'payment marked sent' live-lifecycle.log
+
+      - name: Write scenario manifest
+        if: always()
+        working-directory: starter
+        run: |
+          {
+            echo "scenario=External SDK consumer completes live-node P2P lifecycle"
+            echo "protocol_repository=${PROTOCOL_REPOSITORY}"
+            echo "protocol_source_sha=${PROTOCOL_SOURCE_SHA}"
+            echo "starter_source_sha=${GITHUB_SHA}"
+            echo "command=npm run example:p2p-bitcoin-trade"
+            echo "settlement_scope=MOCK lifecycle validation only; no real BTC movement"
+          } > scenario-manifest.txt
+
+      - name: Upload durable scenario evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: live-node-beta-lifecycle-${{ github.run_id }}
+          path: |
+            starter/live-lifecycle.log
+            starter/registry-baseline.json
+            starter/scenario-manifest.txt
+            health.json
+            sails-node.log
+          if-no-files-found: warn
+          retention-days: 30
