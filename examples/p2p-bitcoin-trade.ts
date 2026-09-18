@@ -108,7 +108,11 @@ async function main() {
     type: 'MOCK',
   })
   await sellerWallet.settlement.lock(escrow.id)
-  console.log(`    escrow ${escrow.id} locked (type: ${escrow.type})`)
+  const lockedEscrow = await sellerWallet.settlement.get(escrow.id)
+  if (lockedEscrow.status !== 'FUNDS_LOCKED') {
+    throw new Error(`Escrow did not reach FUNDS_LOCKED after lock(); got ${lockedEscrow.status}`)
+  }
+  console.log(`    escrow status after lock: ${lockedEscrow.status} (id: ${lockedEscrow.id}, type: ${lockedEscrow.type})`)
 
   step('Buyer marks the fiat payment as sent (settlement.markPaymentSent)')
   await buyerWallet.settlement.markPaymentSent(escrow.id)
