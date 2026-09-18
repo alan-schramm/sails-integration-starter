@@ -39,6 +39,8 @@ import nacl from 'tweetnacl'
 import { SailsClient, type Ed25519Keypair } from '@satsails/p2p-trading-sdk'
 
 const BASE_URL = process.env.SAILS_BASE_URL ?? 'http://localhost:3000'
+const ARBITER_BOOTSTRAP_ONLY = process.env.SAILS_ARBITER_BOOTSTRAP_ONLY === 'true'
+const EXPECTED_ARBITER_ID = process.env.SAILS_EXPECTED_ARBITER_ID
 
 // Deterministic across runs so the same participant (and therefore the
 // same participantId, once registered) comes back every time — see the
@@ -58,17 +60,7 @@ function step(label: string): void {
 }
 
 async function main() {
-  const sellerWallet = new SailsClient({ baseUrl: BASE_URL })
-  const buyerWallet = new SailsClient({ baseUrl: BASE_URL })
   const arbiterClient = new SailsClient({ baseUrl: BASE_URL })
-
-  step('Seller registers and authenticates')
-  const { keypair: sellerKeypair } = await sellerWallet.identity.create(undefined, 'Escrow Arbitration — Seller')
-  await sellerWallet.identity.authenticate(sellerKeypair)
-
-  step('Buyer registers and authenticates')
-  const { keypair: buyerKeypair } = await buyerWallet.identity.create(undefined, 'Escrow Arbitration — Buyer')
-  await buyerWallet.identity.authenticate(buyerKeypair)
 
   step('Arbiter authenticates with the fixed demo identity (registers it on first run only)')
   const arbiterKeypair = fixedArbiterKeypair()
@@ -84,7 +76,33 @@ async function main() {
     console.log(`    fixed arbiter registered for the first time: ${arbiter.id}`)
   }
   console.log(`\n    >>> Arbiter participantId: ${arbiter.id}`)
+  console.log(`ARBITER_EVIDENCE participantId=${arbiter.id}`)
   console.log('    >>> This must appear in the running node\'s TRUSTED_ARBITRATORS env var (see this file\'s header).\n')
+
+  if (ARBITER_BOOTSTRAP_ONLY) {
+    console.log('Arbiter bootstrap complete; no economic lifecycle executed.')
+    return
+  }
+
+  if (!EXPECTED_ARBITER_ID) {
+    throw new Error('SAILS_EXPECTED_ARBITER_ID is required for the bounded dispute evidence run')
+  }
+  if (arbiter.id !== EXPECTED_ARBITER_ID) {
+    throw new Error(`Configured expected arbiter ${EXPECTED_ARBITER_ID} does not match deterministic identity ${arbiter.id}`)
+  }
+
+  const sellerWallet = new SailsClient({ baseUrl: BASE_URL })
+  const buyerWallet = new SailsClient({ baseUrl: BASE_URL })
+
+  step('Seller registers and authenticates')
+  const { keypair: sellerKeypair } = await sellerWallet.identity.create(undefined, 'Escrow Arbitration — Seller')
+  await sellerWallet.identity.authenticate(sellerKeypair)
+  console.log('    seller session established')
+
+  step('Buyer registers and authenticates')
+  const { keypair: buyerKeypair } = await buyerWallet.identity.create(undefined, 'Escrow Arbitration — Buyer')
+  await buyerWallet.identity.authenticate(buyerKeypair)
+  console.log('    buyer session established')
 
   step('Seller publishes a BTC/SELL offer, buyer opens a trade')
   const offer = await sellerWallet.liquidity.publish({
@@ -113,8 +131,13 @@ async function main() {
     type: 'MOCK',
   })
   await sellerWallet.settlement.lock(escrow.id)
+  const lockedEscrow = await sellerWallet.settlement.get(escrow.id)
+  if (lockedEscrow.status !== 'FUNDS_LOCKED') {
+    throw new Error(`Escrow did not reach FUNDS_LOCKED after lock(); got ${lockedEscrow.status}`)
+  }
+  console.log(`    escrow status after lock: ${lockedEscrow.status} (id: ${lockedEscrow.id}, type: ${lockedEscrow.type})`)
   await buyerWallet.settlement.markPaymentSent(escrow.id)
-  console.log(`    escrow ${escrow.id} locked and payment marked sent`)
+  console.log('    payment marked sent')
 
   step('Buyer raises a dispute (settlement.dispute) — e.g. seller went silent after payment')
   let dispute
@@ -131,7 +154,7 @@ async function main() {
   }
   console.log(`    dispute ${dispute.id} opened, assigned to arbiter ${dispute.arbiterId}`)
 
-  if (dispute.arbiterId !== arbiter.id) {
+  if (dispute.arbiterId !== EXPECTED_ARBITER_ID || dispute.arbiterId !== arbiter.id) {
     console.error(
       `\nThe assigned arbiter (${dispute.arbiterId}) is not this script's fixed demo identity (${arbiter.id}). ` +
       'TrustedArbitratorProvider assigns round-robin across every id in TRUSTED_ARBITRATORS — if you\'ve added ' +
@@ -155,7 +178,22 @@ async function main() {
   console.log(`    dispute ${resolved.id} resolved: status=${resolved.status}, ruling=${resolved.ruling}`)
 
   const finalEscrow = await sellerWallet.settlement.get(escrow.id)
+  const finalTrade = await sellerWallet.openp2p.getTrade(trade.id)
+
+  if (resolved.status !== 'RESOLVED') {
+    throw new Error(`Dispute did not reach RESOLVED; got ${resolved.status}`)
+  }
+  if (resolved.ruling !== 'RELEASE') {
+    throw new Error(`Dispute ruling was not RELEASE; got ${resolved.ruling}`)
+  }
+  if (finalEscrow.status !== 'COMPLETED') {
+    throw new Error(`Escrow did not reach COMPLETED; got ${finalEscrow.status}`)
+  }
+
   console.log(`    final escrow status: ${finalEscrow.status}, txReleaseId: ${finalEscrow.txReleaseId ?? '(none — MOCK provider)'}`)
+  console.log(
+    `\nEVIDENCE tradeId=${finalTrade.id} tradeStatus=${finalTrade.status} escrowId=${finalEscrow.id} escrowStatus=${finalEscrow.status} escrowType=${finalEscrow.type} disputeId=${resolved.id} disputeStatus=${resolved.status} ruling=${resolved.ruling} arbiterId=${dispute.arbiterId}`
+  )
 
   console.log('\nDone — real dispute -> assign -> resolve -> release flow completed end-to-end.')
 }
