@@ -5,7 +5,7 @@ import './globals.css'
 
 export const metadata: Metadata = {
   title: 'Sails Integration Starter',
-  description: 'Fase 6 — a real, working @satsails/p2p-trading-sdk quick start.',
+  description: 'Standalone registry-consumer starter for the published Sails SDK family.',
 }
 
 export default function RootLayout({ children }: { children: ReactNode }) {
