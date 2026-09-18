@@ -11,7 +11,8 @@
     "example:escrow-with-arbitration": "ts-node --transpile-only examples/escrow-with-arbitration.ts",
     "test": "jest",
     "typecheck": "tsc --noEmit",
-    "example:nonparty-authority": "ts-node --transpile-only examples/nonparty-authority.ts"
+    "example:nonparty-authority": "ts-node --transpile-only examples/nonparty-authority.ts",
+    "example:destination-authority": "ts-node --transpile-only examples/destination-authority.ts"
   },
   "dependencies": {
     "@satsails/p2p-trading-sdk": "0.2.0",
