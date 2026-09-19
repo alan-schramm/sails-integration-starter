@@ -25,6 +25,18 @@ function signer(keypair: Ed25519Keypair) {
   return { signMessage: async (message: Uint8Array): Promise<Uint8Array> => nacl.sign.detached(message, keypair.secretKey) }
 }
 
+async function runConcurrentRace<T, U>(left: () => Promise<T>, right: () => Promise<U>) {
+  const gate = Promise.withResolvers<void>()
+  const arm = async <R>(fn: () => Promise<R>) => {
+    await gate.promise
+    return fn()
+  }
+  const leftPromise = arm(left)
+  const rightPromise = arm(right)
+  gate.resolve()
+  return Promise.allSettled([leftPromise, rightPromise])
+}
+
 async function main() {
   const oldArbiterClient = new SailsClient({ baseUrl: BASE_URL })
   const newArbiterClient = new SailsClient({ baseUrl: BASE_URL })
@@ -93,6 +105,61 @@ async function main() {
   }
   if (!rejection || rejection.code !== 'FORBIDDEN' || rejection.statusCode !== 403) throw new Error('Expected SailsForbiddenError/FORBIDDEN/403')
   console.log('STALE_AUTHORITY_REJECTED class=' + rejection.name + ' code=' + rejection.code + ' status=' + rejection.statusCode)
+
+  // #225 external race evidence. Both requests are armed before the same
+  // local barrier is released, then race through the published SDK against
+  // the live node. This deliberately does NOT claim deterministic lock-entry
+  // ordering: the protocol must serialize either winner safely.
+  //
+  // We first need a fresh RESOLVED generation whose current arbiter is the
+  // new arbiter. Resolve round 1, then race a second appeal against a stale
+  // replay from that same round. The stale request is signed before the
+  // barrier so signing/getDispute latency cannot accidentally serialize the
+  // HTTP requests for us.
+  const roundOne = await newArbiterClient.settlement.resolveDisputeWithWallet(
+    dispute.id, 'RELEASE', signer(newKeypair)
+  )
+  if (roundOne.status !== 'RESOLVED' || roundOne.appealRound !== 1) {
+    throw new Error('Expected round 1 to be RESOLVED before race')
+  }
+
+  const raceIssuedAt = new Date().toISOString()
+  const raceDigest = hashAuthorityDecision({
+    disputeId: roundOne.id, escrowId: roundOne.escrowId, appealRound: roundOne.appealRound,
+    authorityId: newArbiterId, outcome: 'RELEASE', buyerBps: null, issuedAt: raceIssuedAt
+  })
+  const raceSignature = Buffer.from(nacl.sign.detached(raceDigest, newKeypair.secretKey)).toString('hex')
+
+  const race = await runConcurrentRace(
+    () => newArbiterClient.settlement.resolveDispute(
+      roundOne.id, 'RELEASE', undefined, undefined, undefined, raceSignature, raceIssuedAt
+    ),
+    () => buyer.settlement.appealDispute(roundOne.id),
+  )
+  const raceState = await buyer.settlement.getDispute(roundOne.id)
+  const summary = race.map((result) => result.status === 'fulfilled'
+    ? 'fulfilled'
+    : 'rejected:' + (result.reason instanceof Error ? result.reason.name : typeof result.reason)
+  ).join(',')
+  console.log(
+    'RACE_EVIDENCE disputeId=' + roundOne.id +
+    ' startRound=1 results=' + summary +
+    ' finalStatus=' + raceState.status +
+    ' finalRound=' + raceState.appealRound +
+    ' currentArbiterId=' + raceState.arbiterId
+  )
+
+  // At most one authority-moving operation may succeed. If appeal wins,
+  // generation must advance. If the stale resolve wins/rejects first, the
+  // final state must still be a valid serialized state, never a hybrid.
+  const fulfilled = race.filter((result) => result.status === 'fulfilled').length
+  if (fulfilled > 1) throw new Error('Race allowed both competing authority transitions to succeed')
+  if (raceState.appealRound < 1 || raceState.appealRound > 2) {
+    throw new Error('Race produced impossible appeal generation: ' + raceState.appealRound)
+  }
+  if (raceState.appealRound === 2 && raceState.status !== 'APPEALED') {
+    throw new Error('Advanced race generation is not APPEALED')
+  }
 
   const finalDispute = await buyer.settlement.getDispute(dispute.id)
   if (finalDispute.status !== 'APPEALED' || finalDispute.appealRound !== 1 || finalDispute.previousArbiterId !== oldArbiterId || finalDispute.arbiterId !== newArbiterId) {
